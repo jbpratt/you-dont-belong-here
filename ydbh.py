@@ -1,21 +1,77 @@
 #!/bin/python3
 """
-Find policies in an account that allow outside entities access to services (maybe unknowingly)
+Find policies in an organization that allow outside entities access to services (maybe unknowingly)
 """
+
+from typing import Dict, List
+import argparse
 
 import boto3
 from botocore.exceptions import ClientError
 
 # TODO: Get all inline policies
 
-ORGS = boto3.client('organizations')
-IAM = boto3.client('iam')
+def discovery(acct: Dict, role: str) -> None:
+    sts_client = boto3.client('sts')
+    _id = acct['id']
+    try:
+        creds = sts_client.assume_role(
+            RoleArn=f"arn:aws:iam::{_id}:role/{role}",
+            RoleSessionName=f"{_id}-{role}"
+        )['Credentials']
+    except ClientError as ex:
+        raise ex
+    # load all groups
+    iam = boto3.client(
+        'iam',
+        aws_access_key_id=creds['AccessKeyId'],
+        aws_secret_access_key=creds['SecretAccessKey'],
+        aws_session_token=creds['SessionToken'],
+    )
 
-ACCT_IDS = []
+    policies = None
+    try:
+        response = iam.list_policies(
+            Scope='Local'
+        )
+        policies = response['Policies']
+        while response['IsTruncated']:
+            try:
+                response = iam.list_policies(
+                    Scope='Local',
+                    Marker=response['Marker']
+                )
+                policies.append(response['Policies'])
+            except ClientError as ex:
+                raise ex
+    except ClientError as ex:
+        raise ex
+
+    # look for allowed account numbers not in the allowed list
+    for policy in policies:
+        policy_arn_acct_id = policy['Arn'][13:25]
+        if policy_arn_acct_id != _id:
+            print(f"Found a policy not belonging to {_id}")
+            print(policy)
+
+
+ORGS = boto3.client('organizations')
+
+PARSER = argparse.ArgumentParser(description='')
+PARSER.add_argument(
+        '-org-role',
+        dest='ROLE',
+        type=str,
+        default='OrganizationAccountAccessRole',
+        help='role to assume within account'
+)
+ARGS = PARSER.parse_args()
+
+ACCTS: List = []
 try:
     RESPONSE = ORGS.list_accounts()
     for account in RESPONSE['Accounts']:
-        ACCT_IDS.append(account['id'])
+        ACCTS.append(account)
 
     while RESPONSE['NextToken']:
         try:
@@ -23,103 +79,11 @@ try:
                 NextToken=RESPONSE['NextToken']
             )
             for account in RESPONSE['Accounts']:
-                ACCT_IDS.append(account['id'])
+                ACCTS.append(account)
         except ClientError as ex:
             raise ex
 except ClientError as ex:
     raise ex
 
-
-# load all groups
-ARNS = []
-try:
-    RESPONSE = IAM.list_groups()
-    for group in RESPONSE['Groups']:
-        ARNS.append(group['Arn'][13:25])
-
-    while RESPONSE['IsTruncated']:
-        try:
-            RESPONSE = IAM.list_groups(
-                Marker=RESPONSE['Marker']
-            )
-            for group in RESPONSE['Groups']:
-                ARNS.append(group['Arn'][13:25])
-        except ClientError as ex:
-            raise ex
-except ClientError as ex:
-    raise ex
-
-# load all users
-try:
-    USERS = None
-    RESPONSE = IAM.list_users()
-    for user in RESPONSE['Users']:
-        ARNS.append(user['Arn'][13:25])
-
-    while RESPONSE['IsTruncated']:
-        try:
-            RESPONSE = IAM.list_users(
-                Marker=RESPONSE['Marker']
-            )
-            for user in RESPONSE['Users']:
-                ARNS.append(user['Arn'][13:25])
-        except ClientError as ex:
-            raise ex
-except ClientError as ex:
-    raise ex
-
-# load all roles
-try:
-    ROLES = None
-    RESPONSE = IAM.list_roles()
-    for role in RESPONSE['Roles']:
-        ARNS.append(role['Arn'][13:25])
-
-    while RESPONSE['IsTruncated']:
-        try:
-            RESPONSE = IAM.list_roles(
-                Marker=RESPONSE['Marker']
-            )
-            for role in RESPONSE['Roles']:
-                ARNS.append(role['Arn'][13:25])
-        except ClientError as ex:
-            raise ex
-except ClientError as ex:
-    raise ex
-
-# load all policies
-POLICIES = None
-try:
-    RESPONSE = IAM.list_policies(
-        Scope='Local'
-    )
-    POLICIES = RESPONSE['Policies']
-    while RESPONSE['IsTruncated']:
-        try:
-            RESPONSE = IAM.list_policies(
-                Scope='Local',
-                Marker=RESPONSE['Marker']
-            )
-            POLICIES.append(RESPONSE['Policies'])
-        except ClientError as ex:
-            raise ex
-except ClientError as ex:
-    raise ex
-
-
-# look for allowed account numbers not in the allowed list
-for policy in POLICIES:
-    policy_arn_acct_id = policy['Arn'][13:25]
-    for arn in ARNS:
-        if policy_arn_acct_id != arn:
-            print('Found a policy')
-            print(policy)
-
-"""
-for policy in POLICIES:
-    policy_arn_acct_id = policy['Arn'][13:25]
-    for acct_id in ACCT_IDS:
-        if policy_arn_acct_id != acct_id:
-            print('Found a policy')
-            print(policy)
-"""
+for account in ACCTS:
+    discovery(acct=account, role=ARGS.ROLE)
