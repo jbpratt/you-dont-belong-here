@@ -5,19 +5,20 @@ Find policies in an organization that allow outside entities access to services 
 
 from typing import Dict, List
 import argparse
+import json
 
 import boto3
 from botocore.exceptions import ClientError
 
 # TODO: Get all inline policies
 
-def discovery(acct: Dict, role: str) -> None:
+def discovery(acct: Dict, assume_role: str) -> None:
     sts_client = boto3.client('sts')
     _id = acct['id']
     try:
         creds = sts_client.assume_role(
-            RoleArn=f"arn:aws:iam::{_id}:role/{role}",
-            RoleSessionName=f"{_id}-{role}"
+            RoleArn=f"arn:aws:iam::{_id}:role/{assume_role}",
+            RoleSessionName=f"{_id}-{assume_role}"
         )['Credentials']
     except ClientError as ex:
         raise ex
@@ -28,6 +29,24 @@ def discovery(acct: Dict, role: str) -> None:
         aws_secret_access_key=creds['SecretAccessKey'],
         aws_session_token=creds['SessionToken'],
     )
+
+    roles = None
+    try:
+        response = iam.list_roles()
+        roles = response['Roles']
+        while response['IsTruncated']:
+            try:
+                response = iam.list_roles(
+                    Marker=response['Marker']
+                )
+            except ClientError as ex:
+                raise ex
+
+    for role in roles:
+        ardp = json.loads(role['AssumeRolePolicyDocument'])
+        for statement in ardp['Statement']:
+            if statement['Principal']['AWS']:
+                print(statement['Principal']['AWS'])
 
     policies = None
     try:
