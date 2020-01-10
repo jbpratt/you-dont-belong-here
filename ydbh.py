@@ -45,8 +45,8 @@ def discovery(acct: Dict, assume_role: str) -> None:
     for role in roles:
         ardp = json.loads(role['AssumeRolePolicyDocument'])
         for statement in ardp['Statement']:
-            if statement['Principal']['AWS']:
-                print(statement['Principal']['AWS'])
+            if statement['Principal']['AWS'][13:25] != _id:
+                print(statement)
 
     policies = None
     try:
